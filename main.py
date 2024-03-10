@@ -1,63 +1,72 @@
-import os
-import cv2
-import numpy as np
 from kivy.app import App
-from kivy.uix.widget import Widget
-from kivy.graphics.texture import Texture
-from kivy.clock import Clock
 from kivy.uix.boxlayout import BoxLayout
 from kivy.uix.button import Button
+from kivy.uix.widget import Widget
+from kivy.lang import Builder
+from kivy.clock import Clock
+from kivy.graphics import Color, Rectangle
+import cv2
+import numpy as np
 import tensorflow as tf
 
 
-class ObjectDetectionApp(App):
-    def build(self):
-        self.img1 = Widget()
-        layout = BoxLayout(orientation='vertical')
-        layout.add_widget(self.img1)
-        btn1 = Button(text='Start Detection')
-        btn1.bind(on_press=self.start_detection)
-        layout.add_widget(btn1)
+Builder.load_string('''
+<MyLayout>:
+    orientation: 'vertical'
+''')
 
-  
+class AndroidCamera(Widget):
+    def __init__(self, **kwargs):
+        super(AndroidCamera, self).__init__(**kwargs)
+        self.capture = cv2.VideoCapture(0)
         self.interpreter = tf.lite.Interpreter(model_path="detection_model.tflite")
         self.interpreter.allocate_tensors()
         self.input_details = self.interpreter.get_input_details()
         self.output_details = self.interpreter.get_output_details()
 
-        return layout
-
-    def start_detection(self, instance):
-        self.capture = cv2.VideoCapture(1)
-        Clock.schedule_interval(self.update, 1.0/33.0) # 초당 33프레임
+    def start_detection(self):
+        Clock.schedule_interval(self.update, 1.0 / 30.0)  # 30 FPS
 
     def update(self, dt):
         ret, frame = self.capture.read()
-        if ret:
-            
-            input_image = cv2.resize(frame, (self.input_details[0]['shape'][2], self.input_details[0]['shape'][1]))
-            input_image = np.expand_dims(input_image, axis=0)
+        if not ret:
+            return
+        
+       
+        input_image = cv2.resize(frame, (28, 28))
+        input_image = np.expand_dims(input_image, axis=0).astype(np.float32) / 255.0
+        
+        
+        self.interpreter.set_tensor(self.input_details[0]['index'], input_image)
+        self.interpreter.invoke()
+        preds = self.interpreter.get_tensor(self.output_details[0]['index'])[0]
 
+        label = np.argmax(preds)
+        confidence = preds[label]
 
-            input_image = input_image.astype(np.float32)
+        if confidence > 0.6:  # 임계값 설정(0.6 이상이면 bounding box)
+            self.draw_rectangle(label)
 
-            input_image /= 255.0
+    def draw_rectangle(self, label):
+        with self.canvas:
+            if label == 0:  # apple red box
+                Color(1, 0, 0, 0.5)  
+            elif label == 1:  # banana yellow box
+                Color(1, 1, 0, 0.5)  
+            Rectangle(pos=self.pos, size=self.size)
 
-      
-            self.interpreter.set_tensor(self.input_details[0]['index'], input_image)
-            self.interpreter.invoke()
+class MyLayout(BoxLayout):
+    pass
 
-          
-            detected_objects = self.interpreter.get_tensor(self.output_details[0]['index'])
-
-
-            frame = cv2.flip(frame, 0)
-            buf = frame.tostring()
-            image_texture = Texture.create(size=(frame.shape[1], frame.shape[0]), colorfmt='bgr')
-            image_texture.blit_buffer(buf, colorfmt='bgr', bufferfmt='ubyte')
-            self.img1.canvas.clear()
-            with self.img1.canvas:
-                self.img1.texture = image_texture
+class ObjectDetectionApp(App):
+    def build(self):
+        layout = MyLayout()
+        self.camera = AndroidCamera()
+        layout.add_widget(self.camera)
+        btn = Button(text='Start Detection')
+        btn.bind(on_press=lambda instance: self.camera.start_detection())
+        layout.add_widget(btn)
+        return layout
 
 if __name__ == '__main__':
     ObjectDetectionApp().run()
